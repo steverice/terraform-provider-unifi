@@ -21,7 +21,7 @@ jobs:
       - name: Checkout go-unifi dependency
         uses: actions/checkout@v4
         with:
-          repository: shadyeip/go-unifi
+          repository: steverice/go-unifi
           path: go-unifi
 
       - name: Set up Go
@@ -64,7 +64,7 @@ jobs:
       - name: Checkout go-unifi dependency
         uses: actions/checkout@v4
         with:
-          repository: shadyeip/go-unifi
+          repository: steverice/go-unifi
           path: go-unifi
 
       - name: Set up Go
