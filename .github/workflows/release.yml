@@ -47,14 +47,19 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            # Date-based version: v2026.02.09, v2026.02.09.1, v2026.02.09.2, ...
-            DATE_TAG="v$(date -u +'%Y.%m.%d')"
-            SUFFIX=0
-            TAG="$DATE_TAG"
-            while git rev-parse "$TAG" >/dev/null 2>&1; do
-              SUFFIX=$((SUFFIX + 1))
-              TAG="${DATE_TAG}.${SUFFIX}"
-            done
+            # Date-based version: vYYYY.MM.DD. A 4th component (v2026.06.03.1)
+            # is NOT valid semver and goreleaser hard-fails on it, so same-day
+            # re-releases future-date by one day instead (semver-valid and
+            # monotonic). A third same-day release exhausts that; pass an
+            # explicit 'tag' input via workflow_dispatch in that case.
+            TAG="v$(date -u +'%Y.%m.%d')"
+            if git rev-parse "$TAG" >/dev/null 2>&1; then
+              TAG="v$(date -u -d '+1 day' +'%Y.%m.%d')"
+              if git rev-parse "$TAG" >/dev/null 2>&1; then
+                echo "Both today's and tomorrow's date tags exist; re-run with an explicit 'tag' input." >&2
+                exit 1
+              fi
+            fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
