@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/filipowm/terraform-provider-unifi/internal/provider/utils"
 
@@ -346,18 +345,26 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 	}
 	settingPreference := ""
 	if bandsConfigured {
-		// Keep the legacy single-band field consistent with the requested
-		// array (the controller stores both), and pin setting_preference to
-		// manual the way the UI does when bands are hand-picked.
-		has2g := slices.Contains(wlanBands, "2g")
-		has5gOr6g := slices.Contains(wlanBands, "5g") || slices.Contains(wlanBands, "6g")
+		// The controller persists BOTH the legacy `wlan_band` string and the
+		// modern `wlan_bands` array, and reconciles them server-side: a
+		// *single-band* legacy value (`2g`/`5g`) is authoritative and CLAMPS
+		// `wlan_bands` down to that one band — empirically, sending
+		// `wlan_band="5g"` alongside `wlan_bands=["5g","6g"]` dropped 6GHz and
+		// left `["5g"]`. The permissive value `both` does NOT clamp (the
+		// controller's own tri-band default stores `wlan_band="both"` next to
+		// `wlan_bands=["2g","5g","6g"]`), so it defers to the array. Therefore:
+		// only mirror a single-band selection into the legacy field; for any
+		// multi-band selection — and for a lone `6g`, which the legacy enum
+		// (`2g`/`5g`/`both`) cannot represent — send `both` so `wlan_bands`
+		// wins. Pin setting_preference to manual the way the UI does when
+		// bands are hand-picked.
 		switch {
-		case has2g && has5gOr6g:
-			wlanBand = "both"
-		case has2g:
+		case len(wlanBands) == 1 && wlanBands[0] == "2g":
 			wlanBand = "2g"
-		default:
+		case len(wlanBands) == 1 && wlanBands[0] == "5g":
 			wlanBand = "5g"
+		default:
+			wlanBand = "both"
 		}
 		settingPreference = "manual"
 	} else {
