@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+
 	"github.com/filipowm/terraform-provider-unifi/internal/provider/utils"
 
 	"github.com/filipowm/go-unifi/unifi"
@@ -236,14 +238,32 @@ func ResourceWLAN() *schema.Resource {
 				ValidateFunc: validation.IntInSlice(append([]int{0}, wlanValidMinimumDataRate5g...)),
 			},
 			"wlan_band": {
-				Description: "Radio band selection. Valid values:\n" +
-					"  * `both` - Both 2.4GHz and 5GHz (default)\n" +
+				Description: "Radio band selection (legacy single-band field). Valid values:\n" +
+					"  * `both` - Both 2.4GHz and 5GHz\n" +
 					"  * `2g` - 2.4GHz only\n" +
-					"  * `5g` - 5GHz only",
-				Type:         schema.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.StringInSlice([]string{"2g", "5g", "both"}, false),
-				Default:      "both",
+					"  * `5g` - 5GHz only\n\n" +
+					"Cannot express a 6GHz selection — use `wlan_bands` for that. When neither this nor `wlan_bands` is set, " +
+					"the controller's default (all supported bands) applies.",
+				Type:          schema.TypeString,
+				Optional:      true,
+				Computed:      true,
+				ValidateFunc:  validation.StringInSlice([]string{"2g", "5g", "both"}, false),
+				ConflictsWith: []string{"wlan_bands"},
+			},
+			"wlan_bands": {
+				Description: "Radio bands to broadcast this SSID on (modern multi-band field, supersedes `wlan_band` and supports 6GHz). " +
+					"Valid values for each element: `2g`, `5g`, `6g`. Note that 6GHz requires WPA3 (or WPA3 transition mode) and a " +
+					"6GHz-capable access point. When set, the legacy `wlan_band` field is derived from it and `setting_preference` " +
+					"is forced to `manual`, matching UniFi UI behavior.",
+				Type:          schema.TypeSet,
+				Optional:      true,
+				Computed:      true,
+				MinItems:      1,
+				ConflictsWith: []string{"wlan_band"},
+				Elem: &schema.Schema{
+					Type:         schema.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{"2g", "5g", "6g"}, false),
+				},
 			},
 			"network_id": {
 				Description: "ID of the network (VLAN) for this SSID. Used to assign the WLAN to a specific network segment.",
@@ -312,6 +332,38 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 	}
 	wlanBand := d.Get("wlan_band").(string)
 
+	// Only send wlan_bands when it is explicitly configured. The attribute is
+	// Computed, so d.Get also returns controller-derived state for configs
+	// that only set the legacy wlan_band — echoing that stale array back
+	// would override a wlan_band change.
+	wlanBands, err := utils.SetToStringSlice(d.Get("wlan_bands").(*schema.Set))
+	if err != nil {
+		return nil, err
+	}
+	bandsConfigured := false
+	if raw := d.GetRawConfig(); !raw.IsNull() {
+		bandsConfigured = !raw.GetAttr("wlan_bands").IsNull()
+	}
+	settingPreference := ""
+	if bandsConfigured {
+		// Keep the legacy single-band field consistent with the requested
+		// array (the controller stores both), and pin setting_preference to
+		// manual the way the UI does when bands are hand-picked.
+		has2g := slices.Contains(wlanBands, "2g")
+		has5gOr6g := slices.Contains(wlanBands, "5g") || slices.Contains(wlanBands, "6g")
+		switch {
+		case has2g && has5gOr6g:
+			wlanBand = "both"
+		case has2g:
+			wlanBand = "2g"
+		default:
+			wlanBand = "5g"
+		}
+		settingPreference = "manual"
+	} else {
+		wlanBands = nil
+	}
+
 	schedule, err := listToSchedules(d.Get("schedule").([]interface{}))
 	if err != nil {
 		return nil, fmt.Errorf("unable to process schedule block: %w", err)
@@ -345,6 +397,8 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 		ScheduleWithDuration:    schedule,
 		ScheduleEnabled:         len(schedule) > 0,
 		WLANBand:                wlanBand,
+		WLANBands:               wlanBands,
+		SettingPreference:       settingPreference,
 		PMFMode:                 pmf,
 
 		// TODO: add to schema
@@ -437,6 +491,7 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, meta 
 	d.Set("radius_profile_id", resp.RADIUSProfileID)
 	d.Set("schedule", schedule)
 	d.Set("wlan_band", resp.WLANBand)
+	d.Set("wlan_bands", utils.StringSliceToSet(resp.WLANBands))
 	d.Set("no2ghz_oui", resp.No2GhzOui)
 	d.Set("l2_isolation", resp.L2Isolation)
 	d.Set("proxy_arp", resp.ProxyArp)
