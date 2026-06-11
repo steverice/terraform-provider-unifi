@@ -345,27 +345,19 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 	}
 	settingPreference := ""
 	if bandsConfigured {
-		// The controller persists BOTH the legacy `wlan_band` string and the
-		// modern `wlan_bands` array, and reconciles them server-side: a
-		// *single-band* legacy value (`2g`/`5g`) is authoritative and CLAMPS
-		// `wlan_bands` down to that one band — empirically, sending
-		// `wlan_band="5g"` alongside `wlan_bands=["5g","6g"]` dropped 6GHz and
-		// left `["5g"]`. The permissive value `both` does NOT clamp (the
-		// controller's own tri-band default stores `wlan_band="both"` next to
-		// `wlan_bands=["2g","5g","6g"]`), so it defers to the array. Therefore:
-		// only mirror a single-band selection into the legacy field; for any
-		// multi-band selection — and for a lone `6g`, which the legacy enum
-		// (`2g`/`5g`/`both`) cannot represent — send `both` so `wlan_bands`
-		// wins. Pin setting_preference to manual the way the UI does when
-		// bands are hand-picked.
-		switch {
-		case len(wlanBands) == 1 && wlanBands[0] == "2g":
-			wlanBand = "2g"
-		case len(wlanBands) == 1 && wlanBands[0] == "5g":
-			wlanBand = "5g"
-		default:
-			wlanBand = "both"
-		}
+		// `wlan_bands` is authoritative — but ONLY if the legacy `wlan_band`
+		// string is absent from the payload. The controller derives
+		// `wlan_bands` FROM a present `wlan_band` and ignores the array we
+		// send: empirically `wlan_band="5g"` + `wlan_bands=["5g","6g"]`
+		// persisted `["5g"]`, and `wlan_band="both"` + the same array
+		// persisted `["2g","5g"]` (i.e. `both` expands to 2.4+5, NOT a
+		// permissive "defer to the array"). The legacy enum (`2g`/`5g`/`both`)
+		// can't even express `["5g","6g"]`. So we must OMIT `wlan_band`
+		// entirely: it has `omitempty`, so leaving it "" drops it from the
+		// JSON and the controller honors `wlan_bands` as given. Pin
+		// setting_preference to manual the way the UI does when bands are
+		// hand-picked.
+		wlanBand = ""
 		settingPreference = "manual"
 	} else {
 		wlanBands = nil
